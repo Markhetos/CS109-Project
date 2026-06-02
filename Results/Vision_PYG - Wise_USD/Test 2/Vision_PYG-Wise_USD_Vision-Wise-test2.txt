@@ -1,0 +1,44 @@
+============================================================
+SIMULATION RESULTS
+============================================================
+
+Directive: 10,000,000.00 PYG from VisionBanco_PY
+       to: USD at Wise_US
+
+  Success Rate:              100.0%
+  Mean Final Amount:         1,312.39 USD
+  Std Final Amount:          110.51 USD
+  Mean Fairness Ratio:       0.8558
+  Std Fairness Ratio:        0.0245
+  Fraction with Ratio >= 1:  0.0%
+  Mean Path Length:          4.00 steps
+  Max Path Length:           4 steps
+
+------------------------------------------------------------
+EXAMPLE PATH (median fairness ratio):
+------------------------------------------------------------
+Commercial Benchmark: 1,462.38 USD
+Actual Received:      1,269.17 USD
+Fairness Ratio:       0.8679
+
+START: (VisionBanco_PY, PYG) Amount: 10,000,000.00
+  Step 1: TRANSFER VisionBanco_PY -> Itau_BR [PYG]
+          Amount: 10,000,000.00 -> 9,992,000.00 (fee: 8,000.00)
+  Step 2: FX at Itau_BR: PYG -> BRL
+          Amount: 9,992,000.00 -> 7,124.74 (rate: 0.000716, fee: 28.61)
+  Step 3: TRANSFER Itau_BR -> Wise_US [BRL]
+          Amount: 7,124.74 -> 7,119.74 (fee: 5.00)
+  Step 4: FX at Wise_US: BRL -> USD
+          Amount: 7,119.74 -> 1,269.17 (rate: 0.178977, fee: 5.10)
+END: (Wise_US, USD) Amount: 1,269.17
+
+Generating path visualization...
+Saved network graph to network_example_path.png
+
+Generating statistical plots...
+Saved statistical plots to stats_distributions.png
+Saved FX usage plot to stats_fx_usage.png
+
+============================================================
+SIMULATION COMPLETE
+============================================================

@@ -1,0 +1,35 @@
+============================================================
+SIMULATION RESULTS
+============================================================
+Directive: 1,000.00 USD from SFCU_US
+       to: PYG at Continental_PY
+  Success Rate:              100.0%
+  Mean Final Amount:         6,519,332.66 PYG
+  Std Final Amount:          710,755.58 PYG
+  Mean Fairness Ratio:       0.9859
+  Std Fairness Ratio:        0.0009
+  Fraction with Ratio >= 1:  0.0%
+  Mean Path Length:          3.00 steps
+  Max Path Length:           3 steps
+------------------------------------------------------------
+EXAMPLE PATH (median fairness ratio):
+------------------------------------------------------------
+Commercial Benchmark: 7,401,971.50 PYG
+Actual Received:      7,298,222.00 PYG
+Fairness Ratio:       0.9860
+START: (SFCU_US, USD) Amount: 1,000.00
+  Step 1: TRANSFER SFCU_US -> Chase_US [USD]
+          Amount: 1,000.00 -> 995.00 (fee: 5.00)
+  Step 2: TRANSFER Chase_US -> Continental_PY [USD]
+          Amount: 995.00 -> 985.00 (fee: 10.00)
+  Step 3: FX at Continental_PY: USD -> PYG
+          Amount: 985.00 -> 7,298,222.00 (rate: 7427.932550, fee: 18,291.28)
+END: (Continental_PY, PYG) Amount: 7,298,222.00
+Generating path visualization...
+Saved network graph to network_example_path.png
+Generating statistical plots...
+Saved statistical plots to stats_distributions.png
+Saved FX usage plot to stats_fx_usage.png
+============================================================
+SIMULATION COMPLETE
+============================================================

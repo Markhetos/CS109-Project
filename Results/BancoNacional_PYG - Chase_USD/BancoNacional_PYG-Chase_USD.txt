@@ -1,0 +1,39 @@
+============================================================
+SIMULATION RESULTS
+============================================================
+
+Directive: 10,000,000.00 PYG from BancoNacional_PY
+to: USD at Chase_US
+
+Success Rate: 100.0%
+Mean Final Amount: 1,299.28 USD
+Std Final Amount: 112.85 USD
+Mean Fairness Ratio: 0.8558
+Std Fairness Ratio: 0.0236
+Fraction with Ratio >= 1: 0.0%
+Mean Path Length: 5.00 steps
+Max Path Length: 5 steps
+
+------------------------------------------------------------
+EXAMPLE PATH (median fairness ratio):
+------------------------------------------------------------
+Commercial Benchmark: 1,380.70 USD
+Actual Received: 1,197.81 USD
+Fairness Ratio: 0.8675
+
+START: (BancoNacional_PY, PYG) Amount: 10,000,000.00
+Step 1: TRANSFER BancoNacional_PY -> Itau_BR [PYG]
+Amount: 10,000,000.00 -> 9,985,000.00 (fee: 15,000.00)
+Step 2: FX at Itau_BR: PYG -> BRL
+Amount: 9,985,000.00 -> 6,769.41 (rate: 0.000681, fee: 27.19)
+Step 3: TRANSFER Itau_BR -> Wise_US [BRL]
+Amount: 6,769.41 -> 6,764.41 (fee: 5.00)
+Step 4: FX at Wise_US: BRL -> USD
+Amount: 6,764.41 -> 1,199.81 (rate: 0.178083, fee: 4.82)
+Step 5: TRANSFER Wise_US -> Chase_US [USD]
+Amount: 1,199.81 -> 1,197.81 (fee: 2.00)
+END: (Chase_US, USD) Amount: 1,197.81
+
+============================================================
+SIMULATION COMPLETE
+============================================================
