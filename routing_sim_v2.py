@@ -21,6 +21,11 @@ from collections import defaultdict, Counter
 import warnings
 warnings.filterwarnings('ignore')
 
+from mle_estimation import (
+    fit_all_corridors, summarize_fits,
+    plot_corridor_fits, apply_mle_estimates,
+)
+
 
 # ============================================================================
 # FX DATA LOADING
@@ -1370,6 +1375,7 @@ if __name__ == "__main__":
     NUM_SAMPLES_PER_CANDIDATE = 20
 
     # Load FX data
+    # Load FX data
     print("Loading FX data...")
     try:
         df = load_fx_data(FX_DATA_PATH)
@@ -1380,11 +1386,33 @@ if __name__ == "__main__":
         print("Please ensure the CSV file exists in the current directory.")
         sys.exit(1)
 
-    # Build institutions and transfer graph
+    # === Phase 1: MLE on corridor volatility ====================================
+    print("\nFitting Gaussian and Log-Normal to corridor volatility (MLE)...")
+    fits = fit_all_corridors(df)
+    print(f"  Fit {len(fits)} corridors.")
+    fit_summary = summarize_fits(fits)
+
+    # Print compact summary
+    cols = ["from", "to", "n", "gauss_sigma_bps",
+            "lognorm_SD[X]_bps", "delta_logL", "winner"]
+    print("\nMLE corridor fit summary:")
+    print(fit_summary[cols].to_string(index=False))
+    print(f"\n  Winners: {dict(fit_summary['winner'].value_counts())}")
+
+    # Diagnostic plot for the writeup
+    plot_corridor_fits(
+        df,
+        pairs_to_plot=[("USD", "BRL"), ("USD", "PYG"), ("EUR", "BRL")],
+        filename="mle_corridor_fits.png",
+    )
+
+    # Build institutions and apply MLE-driven sigmas
     print("\nInitializing payment network...")
     institutions = get_institutions()
     transfer_graph = get_transfer_graph()
-    print(f"Created {len(institutions)} institutions.")
+    institutions = apply_mle_estimates(institutions, fits, verbose=True)
+    print(f"Created {len(institutions)} institutions with MLE-driven spreads.")
+    # ============================================================================
 
     # Draw the full network graph
     print("\nGenerating network visualization...")
