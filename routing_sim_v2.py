@@ -24,6 +24,12 @@ warnings.filterwarnings('ignore')
 from mle_estimation import (
     fit_all_corridors, summarize_fits,
     plot_corridor_fits, apply_mle_estimates,
+    INSTITUTION_TIER,
+)
+
+from ou_process import (
+    fit_ou_all_corridors, summarize_ou_fits, plot_ou_diagnostics,
+    OUMarkupEngine,
 )
 
 
@@ -490,20 +496,27 @@ def sample_effective_rate(
     inst: Institution,
     c_from: str,
     c_to: str,
-    row: pd.Series
+    row: pd.Series,
+    ou_engine=None,
+    tier_table=None,
 ) -> Tuple[float, float]:
-    """
-    Sample an institution-specific effective rate for c_from -> c_to.
+    """Sample an institution-specific effective rate for c_from -> c_to.
     Returns (R_eff, delta_vs_commercial).
     """
     R_comm = get_commercial_rate(c_from, c_to, row)
-
     mean_bps = inst.fx_markup_mean_bps.get((c_from, c_to), 0.0)
-    std_bps = inst.fx_markup_std_bps.get((c_from, c_to), 0.0)
+    std_bps  = inst.fx_markup_std_bps.get((c_from, c_to), 0.0)
 
-    markup_bps = np.random.normal(mean_bps, std_bps)
+    if ou_engine is not None and tier_table is not None:
+        # OU-driven temporally correlated draw (Phase 2)
+        tier = tier_table.get(inst.name, 1.0)
+        corridor_noise_bps = ou_engine.step(c_from, c_to)
+        markup_bps = mean_bps + tier * corridor_noise_bps
+    else:
+        # i.i.d. Gaussian fallback (Phase 1 behavior)
+        markup_bps = np.random.normal(mean_bps, std_bps)
+
     multiplier = 1.0 + markup_bps / 10_000.0
-
     R_eff = R_comm * multiplier
     delta = R_eff - R_comm
     return R_eff, delta
@@ -514,16 +527,19 @@ def apply_fx_conversion(
     c_from: str,
     c_to: str,
     amount: float,
-    row: pd.Series
+    row: pd.Series,
+    ou_engine=None,
+    tier_table=None,
 ) -> Tuple[float, float, float, float]:
-    """
-    Apply a stochastic FX conversion within an institution.
+    """Apply a stochastic FX conversion within an institution.
     Returns (net_amount, R_eff, fee, delta_vs_commercial).
     """
     if amount <= 0:
         return 0.0, 0.0, 0.0, 0.0
 
-    R_eff, delta = sample_effective_rate(inst, c_from, c_to, row)
+    R_eff, delta = sample_effective_rate(
+        inst, c_from, c_to, row, ou_engine=ou_engine, tier_table=tier_table
+    )
     gross = amount * R_eff
 
     perc_fee_rate = inst.fx_perc_fee.get((c_from, c_to), 0.0)
@@ -745,6 +761,8 @@ def greedy_policy(
     initial_amount: float,
     max_hops: int = 8,
     num_samples_per_candidate: int = 20,
+    ou_engine=None,
+    tier_table=None,
 ) -> GreedyResult:
     """
     Greedy stepwise stochastic routing with (institution, currency, amount) state.
@@ -884,7 +902,8 @@ def greedy_policy(
 
         else:  # FX
             amount_after, rate_eff, fee, delta = apply_fx_conversion(
-                inst, current_state.currency, best["to_currency"], current_state.amount, row
+                inst, current_state.currency, best["to_currency"], current_state.amount, row,
+                ou_engine=ou_engine, tier_table=tier_table,
             )
             step = StepRecord(
                 step_type="fx",
@@ -940,24 +959,22 @@ def sample_commercial_row(df: pd.DataFrame) -> pd.Series:
 
 
 def run_greedy_experiments(
-    df: pd.DataFrame,
-    institutions: Dict[str, Institution],
-    transfer_graph: Dict[str, List[Tuple[str, str]]],
-    source_bank: str,
-    source_currency: str,
-    dest_bank: str,
-    dest_currency: str,
-    initial_amount: float,
-    num_runs: int = 500,
-    max_hops: int = 8,
+    df, institutions, transfer_graph,
+    source_bank, source_currency, dest_bank, dest_currency, initial_amount,
+    num_runs: int = 500, max_hops: int = 8,
     num_samples_per_candidate: int = 20,
+    ou_fits=None,               # NEW
+    tier_table=None,            # NEW
 ) -> List[GreedyResult]:
-    """Run many independent simulations for one directive."""
     reachability_graph = build_reachability_graph(institutions, transfer_graph)
+    ou_engine = OUMarkupEngine(ou_fits) if ou_fits else None  # NEW
     results: List[GreedyResult] = []
 
     for i in range(num_runs):
         row = sample_commercial_row(df)
+        if ou_engine is not None:
+            ou_engine.reset()   # fresh corridor states for this episode
+
         res = greedy_policy(
             institutions=institutions,
             transfer_graph=transfer_graph,
@@ -970,12 +987,13 @@ def run_greedy_experiments(
             initial_amount=initial_amount,
             max_hops=max_hops,
             num_samples_per_candidate=num_samples_per_candidate,
+            ou_engine=ou_engine,        # NEW
+            tier_table=tier_table,      # NEW
         )
         results.append(res)
 
         if (i + 1) % 100 == 0:
             print(f"  Completed {i + 1}/{num_runs} simulations...")
-
     return results
 
 
@@ -1375,7 +1393,6 @@ if __name__ == "__main__":
     NUM_SAMPLES_PER_CANDIDATE = 20
 
     # Load FX data
-    # Load FX data
     print("Loading FX data...")
     try:
         df = load_fx_data(FX_DATA_PATH)
@@ -1414,6 +1431,25 @@ if __name__ == "__main__":
     print(f"Created {len(institutions)} institutions with MLE-driven spreads.")
     # ============================================================================
 
+
+    # === Phase 2: OU process on corridor log-VOLATILITY =========================
+    print("\nFitting OU process on corridor log-volatility (MLE via AR(1) OLS)...")
+    ou_fits = fit_ou_all_corridors(df, dt=1.0, mode="log_volatility")  # CHANGED
+    print(f"  Fit OU on {len(ou_fits)} corridors.")
+
+    ou_summary = summarize_ou_fits(ou_fits)
+    print("\nOU fit summary (log-volatility):")
+    print(ou_summary[["from", "to", "n", "theta", "stat_std",
+                      "a_raw", "clipped", "half_life_days"]]   # CHANGED columns
+          .to_string(index=False))
+
+    plot_ou_diagnostics(
+        df, ou_fits,
+        pairs_to_plot=[("USD", "BRL"), ("USD", "PYG"), ("BRL", "EUR")],
+        filename="ou_diagnostics.png",
+    )
+    # ============================================================================
+
     # Draw the full network graph
     print("\nGenerating network visualization...")
     draw_network_graph(institutions, transfer_graph, filename="network_all_nodes.png")
@@ -1440,6 +1476,8 @@ if __name__ == "__main__":
         num_runs=NUM_RUNS,
         max_hops=MAX_HOPS,
         num_samples_per_candidate=NUM_SAMPLES_PER_CANDIDATE,
+        ou_fits=ou_fits,
+        tier_table=INSTITUTION_TIER,
     )
 
     # Summarize results
