@@ -32,6 +32,14 @@ from ou_process import (
     OUMarkupEngine,
 )
 
+from efficient_frontier import (
+    enumerate_paths, evaluate_all_paths,
+    find_pareto_frontier, mean_variance_optima,
+    match_greedy_path, plot_efficient_frontier,
+)
+
+from clt_analysis import print_inference_block
+
 
 # ============================================================================
 # FX DATA LOADING
@@ -1498,6 +1506,16 @@ if __name__ == "__main__":
     print(f"  Mean Path Length:          {summary['mean_path_length']:.2f} steps")
     print(f"  Max Path Length:           {summary['max_path_length']} steps")
 
+    # === Phase 4: CLT-based inference ===========================================
+    print_inference_block(
+        results,
+        dest_currency=dest_currency,
+        source_bank=source_bank,
+        source_currency=source_currency,
+        dest_bank=dest_bank,
+    )
+    # ============================================================================
+
     # Find example path (median fairness ratio among successful runs)
     successful_results = [r for r in results if r.success]
     if successful_results:
@@ -1550,6 +1568,90 @@ if __name__ == "__main__":
     print("\nGenerating statistical plots...")
     plot_statistics(results, dest_currency, base_filename="stats")
 
+
+    # === Phase 3: efficient frontier of feasible paths ==========================
+    print("\nEnumerating feasible paths for the efficient-frontier analysis...")
+    reachability_graph = build_reachability_graph(institutions, transfer_graph)
+    source_node = (source_bank, source_currency)
+    dest_node = (dest_bank, dest_currency)
+
+    paths = enumerate_paths(reachability_graph, source_node, dest_node,
+                            max_length=6)
+    print(f"  Found {len(paths)} feasible simple paths (length ≤ 6).")
+
+    if paths:
+        # Evaluate every path by Monte Carlo under the Phase 1/2 model.
+        # Pass the helper functions explicitly to avoid circular imports.
+        FRONTIER_RUNS = 300
+        from ou_process import OUMarkupEngine
+        frontier_ou_engine = (OUMarkupEngine(ou_fits) if ou_fits else None)
+
+        path_stats = evaluate_all_paths(
+            paths,
+            institutions=institutions,
+            df=df,
+            initial_amount=amount,
+            source_currency=source_currency,
+            dest_currency=dest_currency,
+            apply_transfer_fn=apply_transfer,
+            apply_fx_fn=apply_fx_conversion,
+            get_commercial_rate_fn=get_commercial_rate,
+            ou_engine=frontier_ou_engine,
+            tier_table=INSTITUTION_TIER,
+            num_runs=FRONTIER_RUNS,
+        )
+        print(f"  Evaluated {len(path_stats)} paths "
+              f"(each with {FRONTIER_RUNS} Monte Carlo runs).")
+
+        frontier = find_pareto_frontier(path_stats)
+        print(f"  Pareto frontier contains {len(frontier)} non-dominated paths.")
+
+        # Identify the path the greedy policy actually chose (from the median run)
+        greedy_idx = None
+        if successful_results:
+            # Reconstruct the greedy node sequence from the example_result steps
+            greedy_nodes = [(example_result.source_bank,
+                             example_result.source_currency)]
+            for step in example_result.path:
+                greedy_nodes.append((step.inst_to, step.currency_to))
+            greedy_idx = match_greedy_path(path_stats, greedy_nodes)
+            if greedy_idx is not None:
+                gs = path_stats[greedy_idx]
+                print(f"  Greedy policy choice: path {greedy_idx} "
+                      f"(E[ρ]={gs.mean_ratio:.4f}, σ[ρ]={gs.std_ratio:.4f}, "
+                      f"on frontier: {greedy_idx in frontier})")
+            else:
+                print("  Greedy policy choice was not enumerated "
+                      "(likely > max_length); not marked on figure.")
+
+        # Mean-variance optima across a λ grid
+        lambdas = np.array([0.0, 1.0, 5.0, 20.0, 100.0, 500.0])
+        print("\n  Mean-variance λ-sweep:")
+        optima = mean_variance_optima(path_stats, lambdas, verbose=True)
+
+        print("\nλ-sweep diagnostic:")
+        for lam_val in sorted(optima.keys()):
+            idx = optima[lam_val]
+            s = path_stats[idx]
+            print(f"  λ={lam_val:6.1f}: picks path {idx}  "
+                f"E[ρ]={s.mean_ratio:.4f}  σ[ρ]={s.std_ratio:.4f}")
+        
+
+        # Build a clean directive string for the figure title
+        directive_str = (f"{amount:,.0f} {source_currency} {source_bank} "
+                         f"→ {dest_currency} {dest_bank}")
+
+        plot_efficient_frontier(
+            path_stats, frontier, optima,
+            filename="efficient_frontier.png",
+            directive_str=directive_str,
+            greedy_idx=greedy_idx,
+        )
+    else:
+        print("  No feasible paths to plot — skipping efficient-frontier figure.")
+    # ============================================================================
+    
+
     print("\n" + "=" * 60)
     print("SIMULATION COMPLETE")
     print("=" * 60)
@@ -1559,3 +1661,4 @@ if __name__ == "__main__":
         print("  - network_example_path.png (example path highlighted)")
     print("  - stats_distributions.png (statistical distributions)")
     print("  - stats_fx_usage.png (FX conversion usage)")
+    print("  - efficient_frontier.png (Pareto frontier of feasible paths)")
