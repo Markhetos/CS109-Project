@@ -1,2 +1,3 @@
 efficient_frontier_deprecated.py
 *.png
+echo ".fits_cache.pkl" >> .gitignore
