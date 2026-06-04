@@ -18,27 +18,27 @@ import networkx as nx
 from dataclasses import dataclass, field
 from typing import List, Tuple, Dict, Optional, Set
 from collections import defaultdict, Counter
-import warnings
-warnings.filterwarnings('ignore')
-
 from mle_estimation import (
     fit_all_corridors, summarize_fits,
     plot_corridor_fits, apply_mle_estimates,
     INSTITUTION_TIER,
 )
-
 from ou_process import (
     fit_ou_all_corridors, summarize_ou_fits, plot_ou_diagnostics,
     OUMarkupEngine,
 )
-
 from efficient_frontier import (
     enumerate_paths, evaluate_all_paths,
     find_pareto_frontier, mean_variance_optima,
     match_greedy_path, plot_efficient_frontier,
 )
-
 from clt_analysis import print_inference_block
+from sim_utils import make_output_dir, save_fits, load_fits, CACHE_PATH
+from sensitivity_analysis import (
+    run_sensitivity_sweep, summarize_sensitivity, print_writeup_block,
+)
+import warnings
+warnings.filterwarnings('ignore')
 
 
 # ============================================================================
@@ -1411,52 +1411,57 @@ if __name__ == "__main__":
         print("Please ensure the CSV file exists in the current directory.")
         sys.exit(1)
 
-    # === Phase 1: MLE on corridor volatility ====================================
-    print("\nFitting Gaussian and Log-Normal to corridor volatility (MLE)...")
-    fits = fit_all_corridors(df)
-    print(f"  Fit {len(fits)} corridors.")
-    fit_summary = summarize_fits(fits)
+# REPLACE lines 1414-1459 with this:
 
-    # Print compact summary
-    cols = ["from", "to", "n", "gauss_sigma_bps",
-            "lognorm_SD[X]_bps", "delta_logL", "winner"]
-    print("\nMLE corridor fit summary:")
-    print(fit_summary[cols].to_string(index=False))
-    print(f"\n  Winners: {dict(fit_summary['winner'].value_counts())}")
+    # === Phase 1 + Phase 2: MLE and OU fits (cached after first run) ============
+    cached = load_fits(CACHE_PATH)
+    if cached:
+        fits, ou_fits = cached
+        print("Using cached MLE + OU fits.  (Delete .fits_cache.pkl to re-fit.)")
+        institutions = get_institutions()
+        transfer_graph = get_transfer_graph()
+        institutions = apply_mle_estimates(institutions, fits, verbose=False)
+        print(f"Created {len(institutions)} institutions with MLE-driven spreads.")
+    else:
+        print("\nFitting Gaussian and Log-Normal to corridor volatility (MLE)...")
+        fits = fit_all_corridors(df)
+        print(f"  Fit {len(fits)} corridors.")
+        fit_summary = summarize_fits(fits)
+        cols = ["from", "to", "n", "gauss_sigma_bps",
+                "lognorm_SD[X]_bps", "delta_logL", "winner"]
+        print("\nMLE corridor fit summary:")
+        print(fit_summary[cols].to_string(index=False))
+        print(f"\n  Winners: {dict(fit_summary['winner'].value_counts())}")
+        plot_corridor_fits(
+            df,
+            pairs_to_plot=[("USD", "BRL"), ("USD", "PYG"), ("EUR", "BRL")],
+            filename="mle_corridor_fits.png",
+        )
+        print("\nInitializing payment network...")
+        institutions = get_institutions()
+        transfer_graph = get_transfer_graph()
+        institutions = apply_mle_estimates(institutions, fits, verbose=True)
+        print(f"Created {len(institutions)} institutions with MLE-driven spreads.")
 
-    # Diagnostic plot for the writeup
-    plot_corridor_fits(
-        df,
-        pairs_to_plot=[("USD", "BRL"), ("USD", "PYG"), ("EUR", "BRL")],
-        filename="mle_corridor_fits.png",
-    )
-
-    # Build institutions and apply MLE-driven sigmas
-    print("\nInitializing payment network...")
-    institutions = get_institutions()
-    transfer_graph = get_transfer_graph()
-    institutions = apply_mle_estimates(institutions, fits, verbose=True)
-    print(f"Created {len(institutions)} institutions with MLE-driven spreads.")
+        print("\nFitting OU process on corridor log-volatility (MLE via AR(1) OLS)...")
+        ou_fits = fit_ou_all_corridors(df, dt=1.0, mode="log_volatility")
+        print(f"  Fit OU on {len(ou_fits)} corridors.")
+        ou_summary = summarize_ou_fits(ou_fits)
+        print("\nOU fit summary (log-volatility):")
+        print(ou_summary[["from", "to", "n", "theta", "stat_std",
+                          "a_raw", "clipped", "half_life_days"]]
+              .to_string(index=False))
+        plot_ou_diagnostics(
+            df, ou_fits,
+            pairs_to_plot=[("USD", "BRL"), ("USD", "PYG"), ("BRL", "EUR")],
+            filename="ou_diagnostics.png",
+        )
+        save_fits(CACHE_PATH, fits, ou_fits)
     # ============================================================================
 
-
-    # === Phase 2: OU process on corridor log-VOLATILITY =========================
-    print("\nFitting OU process on corridor log-volatility (MLE via AR(1) OLS)...")
-    ou_fits = fit_ou_all_corridors(df, dt=1.0, mode="log_volatility")  # CHANGED
-    print(f"  Fit OU on {len(ou_fits)} corridors.")
-
-    ou_summary = summarize_ou_fits(ou_fits)
-    print("\nOU fit summary (log-volatility):")
-    print(ou_summary[["from", "to", "n", "theta", "stat_std",
-                      "a_raw", "clipped", "half_life_days"]]   # CHANGED columns
-          .to_string(index=False))
-
-    plot_ou_diagnostics(
-        df, ou_fits,
-        pairs_to_plot=[("USD", "BRL"), ("USD", "PYG"), ("BRL", "EUR")],
-        filename="ou_diagnostics.png",
-    )
-    # ============================================================================
+    # Draw the full network graph (always, cheap)
+    print("\nGenerating network visualization...")
+    draw_network_graph(institutions, transfer_graph, filename="network_all_nodes.png")
 
     # Draw the full network graph
     print("\nGenerating network visualization...")
@@ -1464,6 +1469,11 @@ if __name__ == "__main__":
 
     # Get user directive
     source_bank, source_currency, dest_bank, dest_currency, amount = get_user_directive(institutions)
+
+    # NEW: per-directive output folder
+    import os
+    out_dir = make_output_dir("graphs", source_bank, source_currency, dest_bank, dest_currency)
+    print(f"  Output folder: {out_dir}/")
 
     # Check feasibility
     if not check_route_feasibility(institutions, transfer_graph, source_bank, source_currency,
@@ -1556,17 +1566,18 @@ if __name__ == "__main__":
         draw_network_graph(
             institutions,
             transfer_graph,
-            filename="network_example_path.png",
+            filename=os.path.join(out_dir, "network_example_path.png"),
             highlight_path=example_result.path,
             source_node=(example_result.source_bank, example_result.source_currency),
             dest_node=(example_result.dest_bank, example_result.dest_currency),
         )
+
     else:
         print("\nNo successful routes found!")
 
     # Generate statistical plots
     print("\nGenerating statistical plots...")
-    plot_statistics(results, dest_currency, base_filename="stats")
+    plot_statistics(results, dest_currency, base_filename=os.path.join(out_dir, "stats"))
 
 
     # === Phase 3: efficient frontier of feasible paths ==========================
@@ -1643,10 +1654,40 @@ if __name__ == "__main__":
 
         plot_efficient_frontier(
             path_stats, frontier, optima,
-            filename="efficient_frontier.png",
+            filename=os.path.join(out_dir, "efficient_frontier.png"),
             directive_str=directive_str,
             greedy_idx=greedy_idx,
         )
+        # === Sensitivity analysis ===============================================
+        if greedy_idx is not None:
+            print("\n[sensitivity] Checking robustness to tier perturbations...")
+            sens_trials = run_sensitivity_sweep(
+                institutions=institutions,
+                transfer_graph=transfer_graph,
+                df=df,
+                source_bank=source_bank, source_currency=source_currency,
+                dest_bank=dest_bank, dest_currency=dest_currency,
+                initial_amount=amount,
+                mle_fits=fits,
+                ou_fits=ou_fits,
+                greedy_path_nodes=path_stats[greedy_idx].nodes,
+                apply_transfer_fn=apply_transfer,
+                apply_fx_fn=apply_fx_conversion,
+                get_commercial_rate_fn=get_commercial_rate,
+                build_reachability_graph_fn=build_reachability_graph,
+                n_perturbations=10,
+                noise_factor=0.20,
+                num_runs_per_path=100,
+                verbose=True,
+            )
+            sens_summary = summarize_sensitivity(
+                sens_trials,
+                baseline_E=path_stats[greedy_idx].mean_ratio,
+                baseline_sigma=path_stats[greedy_idx].std_ratio,
+                filename=os.path.join(out_dir, "sensitivity_analysis.png"),
+            )
+            print_writeup_block(sens_summary, noise_factor=0.20)
+        # ========================================================================
     else:
         print("  No feasible paths to plot — skipping efficient-frontier figure.")
     # ============================================================================
@@ -1655,10 +1696,13 @@ if __name__ == "__main__":
     print("\n" + "=" * 60)
     print("SIMULATION COMPLETE")
     print("=" * 60)
-    print("\nGenerated files:")
-    print("  - network_all_nodes.png (full network graph)")
-    if successful_results:
-        print("  - network_example_path.png (example path highlighted)")
+    print(f"\nGenerated files (in {out_dir}/):")
+    print("  - network_example_path.png (example path highlighted)")
     print("  - stats_distributions.png (statistical distributions)")
     print("  - stats_fx_usage.png (FX conversion usage)")
     print("  - efficient_frontier.png (Pareto frontier of feasible paths)")
+    print("  - sensitivity_analysis.png (robustness to tier perturbations)")
+    print("\nProject-level files (root):")
+    print("  - network_all_nodes.png (full network graph)")
+    print("  - mle_corridor_fits.png (Phase 1, only on first run)")
+    print("  - ou_diagnostics.png (Phase 2, only on first run)")
