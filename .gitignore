@@ -1,3 +1,4 @@
 efficient_frontier_deprecated.py
-*.png
-echo ".fits_cache.pkl" >> .gitignore
+__pycache__
+.fits_cache.pkl
+.DS_Store
